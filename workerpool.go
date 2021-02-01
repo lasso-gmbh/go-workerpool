@@ -48,6 +48,10 @@ type Pool struct {
 
 	// wg enables the pool to wait for all workers to finish.
 	wg sync.WaitGroup
+
+	mu sync.Mutex
+
+	stopLoop bool
 }
 
 // runTask executes the task.
@@ -55,43 +59,22 @@ func runTask(t Task) {
 	t()
 }
 
-// Stop stops the workers from getting any more tasks from the queue.
+// Stop prevents workers from receiving anymore work and waits on
+// those workers still working to finish their tasks.
 func (p *Pool) Stop() {
-	time.Sleep(100 * time.Millisecond)
+	p.mu.Lock()
+	p.stopLoop = true
+	p.mu.Unlock()
+
 	close(p.nextTask)
 	p.wg.Wait()
 }
 
-// Wait waits for all workers to finish their tasks.
-func (p *Pool) Wait() {
-	// dont know how to handle this...
-	// if wait is called imediately after a task is enqueued
-	// it may take longer for the task to be assigned (and the wg to be incremented)
-	// then the time it takes the main thread to reach this function
-	// in which case wg.Wait() will not block.
-	// so I added a small sleep time, but this is a hacky solution
-	time.Sleep(100 * time.Millisecond)
+// StopWait will wait for all workers to finish their task and the queue to be
+// depleted.
+func (p *Pool) StopWait() {
+	close(p.queue)
 	p.wg.Wait()
-
-	// other solution ...
-	// create a task for all slots in which the done channel
-	// recieves an empty struct
-	// block until we have drained the done channel
-	// works but I dont like it because it wouldnt work
-	// if our requests were not functions
-
-	// n := cap(p.sema)
-	// doneChan := make(chan struct{}, n)
-	// for i := 0; i < n; i++ {
-	// 	f := func() {
-	// 		doneChan <- struct{}{}
-	// 	}
-	// 	p.EnqueueTask(Task(f))
-	// }
-	// for i := 0; i < n; i++ {
-	// 	<-doneChan
-	// }
-	// close(doneChan)
 }
 
 // slotsInUse should return the number of slots used by the pool.
@@ -150,11 +133,9 @@ loop:
 	p.wg.Done()
 }
 
-// assign assigns a task to a worker.
-//
-// If all workers are busy, the task is placed in the queue for task execution.
-// if there are slots available, a worker is created and assigend the task.
-func (p *Pool) assign(t Task) {
+// tryNewWorker will try to create another worker if the pool has any free slots,
+// and otherwise terminate.
+func (p *Pool) tryNewWorker() {
 	select {
 	case p.sema <- 1:
 		p.wg.Add(1)
@@ -163,9 +144,13 @@ func (p *Pool) assign(t Task) {
 	}
 }
 
-// loop takes tasks from the queue and assigns them to workers.
+// loop takes tasks from the queue and pushes them into the nextTask channel where
+// where workers grab their tasks.
 //
-// The loop will exit if the queue channel is closed or if the context is cancelled
+// The loop will exit if a hard stop is set, regardless of whether the queue is empty or not.
+// If the queue channel is closed, the loop will still drain the channel before closing.
+//
+// A context with timeout can also be used to run the loop for a limited amount of time.
 func (p *Pool) loop(ctx context.Context) {
 	for {
 		select {
@@ -173,8 +158,11 @@ func (p *Pool) loop(ctx context.Context) {
 			if !ok {
 				return
 			}
+			if p.stopLoop {
+				return
+			}
+			p.tryNewWorker()
 			p.nextTask <- t
-			p.assign(t)
 		case <-ctx.Done():
 			return
 		}
@@ -184,8 +172,17 @@ func (p *Pool) loop(ctx context.Context) {
 // EnqueueTask adds a task to the queue.
 //
 // This call should never block.
+//
+// A new task is first pushed to the next task channel and the pool tries to
+// create a worker.
+// If the nextTask channel is full, the task is added to the queue.
 func (p *Pool) EnqueueTask(t Task) {
-	p.queue <- t
+	select {
+	case p.nextTask <- t:
+		p.tryNewWorker()
+	default:
+		p.queue <- t
+	}
 
 }
 
