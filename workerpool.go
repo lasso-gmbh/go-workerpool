@@ -22,7 +22,7 @@ type Task func()
 // It can limit the number of concurrent processes and
 // will not block when a request comes in. All incoming
 // requests that cannot be processed imediately are stored
-// in an unbuffered channel.
+// in an buffered channel.
 type Pool struct {
 	// semaphore
 	// limits the number of concurrent go routines in the pool
@@ -33,8 +33,7 @@ type Pool struct {
 
 	// queue is where all incoming requests are stored.
 	//
-	// The channel is unbuffered allowing for a lot of
-	// requests to come in, without blocking the client.
+	// The channel is buffered, this can be an issue if a lot of requests start coming in
 	queue chan Task
 
 	// nextTask is a buffered channel of length one.
@@ -49,8 +48,11 @@ type Pool struct {
 	// wg enables the pool to wait for all workers to finish.
 	wg sync.WaitGroup
 
+	// for settign stopLoop
 	mu sync.Mutex
 
+	// stopLoop is a hard stop that will terminate the main loop
+	// preventing the pool from processing any remaining tasks in the queue
 	stopLoop bool
 }
 
