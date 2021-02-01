@@ -8,7 +8,11 @@ import (
 )
 
 const (
+	// number of seconds a worker will remain idle before it terminates itself
 	workerIdleTimeSeconds int = 2
+
+	// size of the queue channel
+	bufferSize int = 10000
 )
 
 // Task simulates some task/request to handle
@@ -51,22 +55,21 @@ func runTask(t Task) {
 	t()
 }
 
-// Wait will block until all tasks in the queue have
-// finished if requested to wait. Otherwise just wait for the workers
-// to finish.
-func (p *Pool) stop(wait bool) {
-	if !wait {
-		// wait for workers to finish
-		p.wg.Wait()
-		return
-	}
+// Stop stops the workers from getting any more tasks from the queue.
+func (p *Pool) Stop() {
+	time.Sleep(100 * time.Millisecond)
+	close(p.nextTask)
+	p.wg.Wait()
+}
 
+// Wait waits for all workers to finish their tasks.
+func (p *Pool) Wait() {
 	// dont know how to handle this...
-	// if stop is called imediately after a task is enqueued
+	// if wait is called imediately after a task is enqueued
 	// it may take longer for the task to be assigned (and the wg to be incremented)
 	// then the time it takes the main thread to reach this function
 	// in which case wg.Wait() will not block.
-	// so I added a small sleep time, but this is hacky solution
+	// so I added a small sleep time, but this is a hacky solution
 	time.Sleep(100 * time.Millisecond)
 	p.wg.Wait()
 
@@ -89,11 +92,6 @@ func (p *Pool) stop(wait bool) {
 	// 	<-doneChan
 	// }
 	// close(doneChan)
-}
-
-// StopWait qwill exit the main event loop imediately.
-func (p *Pool) StopWait() {
-	p.stop(true)
 }
 
 // slotsInUse should return the number of slots used by the pool.
@@ -124,10 +122,14 @@ loop:
 		// all workers listen on this channel
 		case t, ok := <-p.nextTask:
 			if !ok {
-				log.Printf("worker closing : belt closed\n")
+				log.Printf("worker closing: channel closed\n")
 				break loop
 			}
-			log.Println("worker recieved work")
+
+			if t == nil {
+				log.Printf("worker closing: nil task\n")
+				break loop
+			}
 
 			// execute the task
 			runTask(t)
@@ -138,7 +140,7 @@ loop:
 			}
 			timer.Reset(time.Duration(workerIdleTimeSeconds) * time.Second)
 		case <-timer.C:
-			log.Printf("worker closing : no work\n")
+			log.Printf("worker closing: timeout\n")
 			break loop
 		}
 	}
@@ -152,18 +154,13 @@ loop:
 //
 // If all workers are busy, the task is placed in the queue for task execution.
 // if there are slots available, a worker is created and assigend the task.
-//
-// The routine blocks if all workers are busy.
 func (p *Pool) assign(t Task) {
 	select {
 	case p.sema <- 1:
-		log.Printf("creating new worker\n")
 		p.wg.Add(1)
 		go p.worker()
 	default:
 	}
-	// place task in queue for execution
-	p.nextTask <- t
 }
 
 // loop takes tasks from the queue and assigns them to workers.
@@ -174,12 +171,9 @@ func (p *Pool) loop(ctx context.Context) {
 		select {
 		case t, ok := <-p.queue:
 			if !ok {
-				log.Println("queue has been closed")
 				return
 			}
-			// need to catch the exit signal here
-
-			// blocks here
+			p.nextTask <- t
 			p.assign(t)
 		case <-ctx.Done():
 			return
@@ -200,8 +194,12 @@ func (p *Pool) EnqueueTask(t Task) {
 // Parameter limit sets the number of concrrent jobs that can
 // be run at once.
 func NewPool(ctx context.Context, limit int) *Pool {
+	if limit <= 0 {
+		limit = 1
+	}
+
 	p := &Pool{
-		queue:    make(chan Task),
+		queue:    make(chan Task, bufferSize),
 		sema:     make(chan int, limit),
 		nextTask: make(chan Task, 1),
 	}
