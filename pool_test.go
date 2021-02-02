@@ -15,6 +15,13 @@ func Benchmark8Workers(b *testing.B) {
 	bench(8, b)
 }
 
+func Benchmark16Workers(b *testing.B) {
+	bench(16, b)
+}
+func Benchmark64Workers(b *testing.B) {
+	bench(64, b)
+}
+
 func bench(n int, b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -22,7 +29,6 @@ func bench(n int, b *testing.B) {
 	p := NewPool(ctx, n)
 
 	var wg sync.WaitGroup
-
 	wg.Add(b.N * n)
 
 	b.ResetTimer()
@@ -34,8 +40,7 @@ func bench(n int, b *testing.B) {
 			}))
 		}
 	}
-
-	p.StopWait()
+	wg.Wait()
 }
 
 func TestReuseWorker(t *testing.T) {}

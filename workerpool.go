@@ -2,7 +2,6 @@ package workerpool
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 )
@@ -77,6 +76,7 @@ func (p *Pool) Stop() {
 func (p *Pool) StopWait() {
 	close(p.queue)
 	p.wg.Wait()
+	// close(p.nextTask)
 }
 
 // slotsInUse should return the number of slots used by the pool.
@@ -107,12 +107,10 @@ loop:
 		// all workers listen on this channel
 		case t, ok := <-p.nextTask:
 			if !ok {
-				log.Printf("worker closing: channel closed\n")
 				break loop
 			}
 
 			if t == nil {
-				log.Printf("worker closing: nil task\n")
 				break loop
 			}
 
@@ -125,7 +123,6 @@ loop:
 			}
 			timer.Reset(time.Duration(workerIdleTimeSeconds) * time.Second)
 		case <-timer.C:
-			log.Printf("worker closing: timeout\n")
 			break loop
 		}
 	}
