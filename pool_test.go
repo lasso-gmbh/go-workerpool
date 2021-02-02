@@ -22,6 +22,10 @@ func Benchmark64Workers(b *testing.B) {
 	bench(64, b)
 }
 
+func Benchmark1024Workers(b *testing.B) {
+	bench(1024, b)
+}
+
 func bench(n int, b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
